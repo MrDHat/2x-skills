@@ -1,8 +1,29 @@
 # fin-2x
 
-A marketplace of Claude Code skills built by the Fin 2x team.
+Skills built by the Fin 2x team, available for Claude Code and Pi.
 
 ## Install
+
+### Pi
+
+Install from this fork (not the upstream marketplace):
+
+```bash
+pi install git:github.com/MrDHat/2x-skills
+```
+
+For a local checkout, use `pi install /absolute/path/to/2x-skills`.
+Use `pi install --local <source>` for project scope, or `pi config` to select resources.
+Run `/reload` in an existing session after installation.
+
+Invoke skills with `/skill:<name>`, for example `/skill:create-pr` or
+`/skill:secure-github-actions`. Pi also selects skills from their descriptions.
+Bundled scripts require their usual tools (Python 3, bash, `gh`, `jq`, and/or `curl`);
+installing the package does not install system tools.
+
+See [Pi support](./docs/pi.md) for compatibility and integration details.
+
+### Claude Code
 
 Add the marketplace, then install the plugin you want:
 

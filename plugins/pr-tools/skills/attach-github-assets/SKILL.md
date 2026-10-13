@@ -39,6 +39,15 @@ Canonical triggers:
 
 If you have been loaded but none of the "When to Self-Invoke" conditions are met, emit `no-op: <reason>` and return control. This is the script-first path; staying loaded without uploading is the failure mode.
 
+## Harness compatibility
+
+In Pi, arguments arrive in the user request after `/skill:attach-github-assets`, not
+in an environment variable. Resolve script paths from this skill's directory
+(the parent of the loaded `SKILL.md`), never from the repository being worked on.
+In the examples below, `<skill-dir>` means that absolute directory; substitute
+it before running the command. Claude Code can resolve the same directory via
+`${CLAUDE_PLUGIN_ROOT}/skills/attach-github-assets`.
+
 ## Flow
 
 ### Step 1: Resolve file path(s)
@@ -55,7 +64,7 @@ The script has two modes. Pick by one fact — **where do the files have to end 
 **A new comment on a named issue or PR** → post it in one call, all files at once:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/skills/attach-github-assets/scripts/upload.sh \
+"<skill-dir>/scripts/upload.sh" \
   --post-to <pr|issue>:<number> [--repo OWNER/REPO] [--body "<text>"] "<file-path>" ["<other-file>" ...]
 ```
 
@@ -64,7 +73,7 @@ Prints the comment URL. Use `pr:` for a pull request and `issue:` for an issue �
 **Anywhere else** → print the asset URL, **once per file**, for embedding in a body assembled elsewhere:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/skills/attach-github-assets/scripts/upload.sh "<file-path>"
+"<skill-dir>/scripts/upload.sh" "<file-path>"
 ```
 
 The script auto-detects the repo ID from `git remote` and MIME type from extension. Returns the asset URL on stdout, exits non-zero on failure.
@@ -72,7 +81,7 @@ The script auto-detects the repo ID from `git remote` and MIME type from extensi
 To override repo ID (e.g. uploading from a worktree whose remote isn't the target repo):
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/skills/attach-github-assets/scripts/upload.sh "<file-path>" <repo_id>
+"<skill-dir>/scripts/upload.sh" "<file-path>" <repo_id>
 ```
 
 In this mode run the script **once per file** — never batch into a single invocation, because the second positional argument is read as the repo ID. Never substitute `curl`, a bare `gh` command, or any other upload mechanism for the script.

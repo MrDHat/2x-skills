@@ -1,0 +1,21 @@
+{
+  "name": "fin-2x-pi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fin 2x skills and integrations for Pi and Claude Code",
+  "license": "MIT",
+  "keywords": ["pi-package"],
+  "pi": {
+    "skills": [
+      "./plugins/skill-tools/skills",
+      "./plugins/security-tools/skills",
+      "./plugins/test-tools/skills",
+      "./plugins/code-review-tools/skills",
+      "./plugins/pr-tools/skills"
+    ],
+    "extensions": []
+  },
+  "scripts": {
+    "test": "python3 -m unittest discover -s tests -v"
+  }
+}

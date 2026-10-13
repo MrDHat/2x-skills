@@ -6,6 +6,21 @@ allowed-tools: Bash Read Write Grep Glob AskUserQuestion
 
 # Pull Request Creation
 
+## Harness compatibility
+
+This workflow supports Claude Code and Pi. In Pi, `Bash`/`Read`/`Write` mean
+`bash`/`read`/`write`; use bash for searches if grep/find tools are unavailable.
+`AskUserQuestion` means ask the user directly and wait for their response.
+Frontmatter `allowed-tools` is not a Pi permission boundary.
+
+Resolve `<skill-dir>` below to the absolute directory containing this `SKILL.md`.
+Resolve `<plugin-dir>` to two directories above it. Do not assume the working
+repository contains these scripts. Claude Code may also use `CLAUDE_PLUGIN_ROOT`.
+
+For Pi, use exactly one `<sub>Generated with Pi</sub>` attribution instead of the
+Claude Code footer in this document. Only include a plan supplied in the current
+conversation or explicitly named by the user; Pi has no built-in Claude plan store.
+
 ## Core Rules
 
 1. **NEVER dispatch a sub-agent.** Run every step of this workflow directly in the main session — the `Task`/`Agent` tool is deliberately not in this skill's `allowed-tools`. Dispatching to a sub-agent is a common failure mode: subagents lose the session's intent, can't see the diff in context, and re-ask intent questions you already answered. If you find yourself reaching for `Task(...)` — even to "run this in parallel", "off-load the boring parts", or "delegate the gh pr create" — stop and run the next step inline instead. This rule overrides any general preference for parallelism, delegation, or context-window savings.
@@ -49,7 +64,7 @@ Did the user explicitly state:
 Run it once early and reuse the results for steps 2, 2.5, 3, and 3.6:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/skills/create-pr/scripts/check-pr-context.sh"
+bash "<skill-dir>/scripts/check-pr-context.sh"
 ```
 
 Returns JSON:
@@ -99,7 +114,7 @@ If changes aren't committed and pushed, do that first. Always push with `-u` to 
 
 ### 3.5. Determine the base branch
 
-Start with `default_branch` from step 1.5. Override it if the current branch has an upstream tracking branch that differs: `git rev-parse --abbrev-ref @{upstream} 2>/dev/null`. If the upstream tracks a different remote branch (e.g., `develop` instead of `main`), use that as the base. If uncertain, ask the user. Always pass `--base <branch>` to `gh pr create`.
+Start with `default_branch` from step 1.5. For stacked PRs, use the preceding stack branch explicitly requested by the user as the base. An upstream tracking branch created by `git push -u` is the head branch, not evidence of a different base. If uncertain, ask the user. Always pass `--base <branch>` and `--repo <owner/repo>` to `gh pr create`. When working in a fork, default to the origin repository returned by the context script; never target the parent repository unless the user explicitly requests it.
 
 ### 3.55. Validate diff matches intent
 
@@ -169,7 +184,7 @@ Use `gh` CLI for all PR operations:
 
 **Create new PR:**
 ```bash
-gh pr create --base "<base-branch>" --title "<title>" --body "$(cat <<'EOF'
+gh pr create --repo "<owner/repo>" --base "<base-branch>" --title "<title>" --body "$(cat <<'EOF'
 <description body here>
 EOF
 )"
@@ -234,12 +249,14 @@ The footer is the only attribution outside the collapsed `<details>` block (Core
 
 ### 5. Launch the watchers
 
-Once the PR URL is known, launch all three watchers in the background — one Bash tool call per watcher, `run_in_background: true` on each:
+Once the PR URL is known, launch all three watchers using the harness's background execution support. In Claude Code, use one Bash call per watcher with `run_in_background: true`. In Pi, use the `fin_2x_watch_pr` tool supplied by this package (it manages bounded watchers and cleanup). If the extension is disabled, report that monitoring is unavailable; do not invent a `run_in_background` argument on Pi's bash tool.
+
+Claude Code watcher commands:
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-comments.sh" <pr-url>
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/watch-pr-merged.sh" <pr-url>
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/pr-check-watcher.sh" <pr-url>
+bash "<plugin-dir>/scripts/watch-pr-comments.sh" <pr-url>
+bash "<plugin-dir>/scripts/watch-pr-merged.sh" <pr-url>
+bash "<plugin-dir>/scripts/pr-check-watcher.sh" <pr-url>
 ```
 
 Do NOT poll `gh pr view` or `gh pr checks` for comments, merge state, or CI — that is what these watchers replace.
