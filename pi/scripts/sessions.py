@@ -8,6 +8,7 @@ import re
 import sys
 import time
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -89,8 +90,8 @@ def misses(paths):
     return {'missing_tools': {k: v for k, v in missing.items() if k not in ignored}, 'wrong_version_tools': {k: v for k, v in wrong.items() if k not in ignored}, 'ignored_tools': sorted(ignored), 'ignore_file': str(ignored_path), 'files_scanned': len(paths), 'failed_pairs_analyzed': len(pairs)}
 
 
-def costs(paths):
-    groups = defaultdict(lambda: {'requests': 0, 'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0, 'recorded_cost_usd': 0, 'missing_cost_records': 0})
+def costs(paths, cutoff=None):
+    groups = defaultdict(lambda: {'usage_records': 0, 'input': 0, 'output': 0, 'cacheRead': 0, 'cacheWrite': 0, 'recorded_cost_usd': 0, 'missing_cost_records': 0, 'missing_timestamp_records': 0})
     seen = set()
     for path in paths:
         for entry in records(path):
@@ -99,6 +100,13 @@ def costs(paths):
             usage = source.get('usage')
             if not isinstance(usage, dict):
                 continue
+            timestamp = entry.get('timestamp', source.get('timestamp'))
+            try:
+                epoch = timestamp / 1000 if isinstance(timestamp, (int, float)) else datetime.fromisoformat(timestamp.replace('Z', '+00:00')).timestamp()
+            except (AttributeError, ValueError, TypeError):
+                epoch = None
+            if cutoff is not None and epoch is not None and epoch < cutoff:
+                continue
             # Forks copy entry IDs: count copied history once across the report.
             identity = (entry.get('id'), entry.get('timestamp'), json.dumps(usage, sort_keys=True))
             if entry.get('id') and identity in seen:
@@ -106,7 +114,9 @@ def costs(paths):
             seen.add(identity)
             key = f"{source.get('provider', 'unattributed')}/{source.get('model', 'unattributed')}"
             group = groups[key]
-            group['requests'] += 1
+            group['usage_records'] += 1
+            if epoch is None:
+                group['missing_timestamp_records'] += 1
             for field in ('input', 'output', 'cacheRead', 'cacheWrite'):
                 group[field] += usage.get(field, 0) or 0
             total = (usage.get('cost') or {}).get('total')
@@ -142,7 +152,7 @@ def main():
     if args.report == 'memories' and not args.root:
         parser.error('memories requires --root; Pi has no built-in saved-memory store')
     try:
-        result = memories(root) if args.report == 'memories' else {'root': str(root.resolve()), **(misses(files(root, args.days)) if args.report == 'misses' else costs(files(root, args.days)))}
+        result = memories(root) if args.report == 'memories' else {'root': str(root.resolve()), **(misses(files(root, args.days)) if args.report == 'misses' else costs(files(root, args.days), cutoff=time.time() - args.days * 86400)), 'days': args.days}
         json.dump(result, sys.stdout, indent=2)
         print()
     except (OSError, ValueError, TypeError) as error:

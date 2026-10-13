@@ -70,8 +70,8 @@ fi
 last_summary=""
 last_runs_body=""
 last_status_body=""
-poll_interval=3
-max_wait=570  # 9.5 minutes (leaves 30s buffer within Bash tool's 10-min timeout)
+poll_interval="${WATCH_INTERVAL:-3}"
+max_wait="${WATCH_MAX_WAIT:-570}"  # bounded window, overridable for tests
 start_time=$(date +%s)
 
 # Helper: fetch an API endpoint with optional ETag, sets $fetch_code, $fetch_etag, $fetch_body
@@ -86,9 +86,20 @@ fetch_with_etag() {
         response=$(gh api "$endpoint" -i 2>&1) || true
     fi
 
-    fetch_code=$(echo "$response" | head -1 | grep -oE '[0-9]{3}' | head -1)
-    fetch_etag=$(echo "$response" | grep -i '^etag:' | sed 's/^[Ee][Tt][Aa][Gg]: *//' | tr -d '\r')
+    fetch_code=$(echo "$response" | head -1 | grep -oE '[0-9]{3}' | head -1 || true)
+    fetch_etag=$(echo "$response" | grep -i '^etag:' | sed 's/^[Ee][Tt][Aa][Gg]: *//' | tr -d '\r' || true)
     fetch_body=$(echo "$response" | sed '1,/^\r*$/d')
+    # Conditional requests are only valid for a single page. For larger lists,
+    # refetch all pages and clear the ETag so changes beyond page one are seen.
+    if [[ "$fetch_code" == "200" ]] && echo "$fetch_body" | jq -e '.total_count > ((.check_runs // .statuses // []) | length)' >/dev/null 2>&1; then
+        fetch_body=$(gh api --paginate --slurp "$endpoint" | jq -c '
+          if .[0] | has("check_runs") then
+            {total_count: .[0].total_count, check_runs: [.[].check_runs[]]}
+          else
+            {total_count: .[0].total_count, statuses: [.[].statuses[]]}
+          end') || { echo "Error: could not read all check/status pages" >&2; exit 2; }
+        fetch_etag=""
+    fi
 }
 
 while true; do
@@ -101,27 +112,59 @@ while true; do
         exit 3
     fi
 
+    # A new push must invalidate both caches; never report checks for an old head.
+    current_sha=$(gh api "repos/$owner/$repo/pulls/$pr_number" --jq '.head.sha' 2>/dev/null) || {
+        echo "Error: could not refresh PR head" >&2
+        exit 2
+    }
+    if [[ -z "$current_sha" ]]; then
+        echo "Error: empty PR head" >&2
+        exit 2
+    fi
+    if [[ "$current_sha" != "$head_sha" ]]; then
+        head_sha="$current_sha"
+        runs_etag=""
+        status_etag=""
+        last_runs_body=""
+        last_status_body=""
+        echo "New PR head ${head_sha:0:7}; restarting check monitoring."
+    fi
+
     runs_changed=false
     status_changed=false
+    round_ok=true
+
+    # A resumed process has ETags but no cached response bodies. Fetch each
+    # endpoint unconditionally once, then use ETags within this window.
+    [[ -z "$last_runs_body" ]] && runs_etag=""
+    [[ -z "$last_status_body" ]] && status_etag=""
 
     # Poll check-runs API
-    fetch_with_etag "repos/$owner/$repo/commits/$head_sha/check-runs" "$runs_etag"
+    fetch_with_etag "repos/$owner/$repo/commits/$head_sha/check-runs?per_page=100" "$runs_etag"
     if [[ "$fetch_code" == "200" ]]; then
-        [[ -n "$fetch_etag" ]] && runs_etag="$fetch_etag"
+        runs_etag="$fetch_etag"
         last_runs_body="$fetch_body"
         runs_changed=true
     elif [[ "$fetch_code" != "304" ]]; then
         echo "Warning: check-runs returned HTTP $fetch_code, retrying..." >&2
+        round_ok=false
     fi
 
     # Poll commit statuses API
-    fetch_with_etag "repos/$owner/$repo/commits/$head_sha/status" "$status_etag"
+    fetch_with_etag "repos/$owner/$repo/commits/$head_sha/status?per_page=100" "$status_etag"
     if [[ "$fetch_code" == "200" ]]; then
-        [[ -n "$fetch_etag" ]] && status_etag="$fetch_etag"
+        status_etag="$fetch_etag"
         last_status_body="$fetch_body"
         status_changed=true
     elif [[ "$fetch_code" != "304" ]]; then
         echo "Warning: statuses returned HTTP $fetch_code, retrying..." >&2
+        round_ok=false
+    fi
+
+    # Never interpret absent data from a failed endpoint as green.
+    if [[ "$round_ok" == "false" || -z "$last_runs_body" || -z "$last_status_body" ]]; then
+        sleep "$poll_interval"
+        continue
     fi
 
     # If neither changed, skip processing
@@ -136,7 +179,7 @@ while true; do
     runs_in_progress=$(echo "$last_runs_body" | jq '[.check_runs[] | select(.status == "in_progress")] | length')
     runs_queued=$(echo "$last_runs_body" | jq '[.check_runs[] | select(.status == "queued")] | length')
     runs_success=$(echo "$last_runs_body" | jq '[.check_runs[] | select(.conclusion == "success" or .conclusion == "skipped" or .conclusion == "neutral")] | length')
-    runs_failure=$(echo "$last_runs_body" | jq '[.check_runs[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled")] | length')
+    runs_failure=$(echo "$last_runs_body" | jq '[.check_runs[] | select(.status == "completed" and (.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral"))] | length')
 
     # Count commit statuses (from combined status endpoint, already deduplicated)
     statuses_total=$(echo "$last_status_body" | jq '[.statuses // [] | .[]] | length')
@@ -173,11 +216,14 @@ while true; do
 
     # Check terminal conditions
     if (( completed == total && total > 0 )); then
+        # Close the push-during-poll race before emitting a terminal result.
+        terminal_sha=$(gh api "repos/$owner/$repo/pulls/$pr_number" --jq '.head.sha' 2>/dev/null) || exit 2
+        [[ "$terminal_sha" != "$head_sha" ]] && continue
         if (( failure > 0 )); then
             echo ""
             echo "FAILED checks:"
             # Failed check runs
-            echo "$last_runs_body" | jq -r '.check_runs[] | select(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled") | "  - \(.name): \(.conclusion) (\(.html_url))"'
+            echo "$last_runs_body" | jq -r '.check_runs[] | select(.status == "completed" and (.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral")) | "  - \(.name): \(.conclusion) (\(.html_url))"'
             # Failed commit statuses
             echo "$last_status_body" | jq -r '.statuses // [] | .[] | select(.state == "failure" or .state == "error") | "  - \(.context): \(.state) (\(.target_url))"'
             exit 1

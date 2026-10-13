@@ -5,7 +5,9 @@
   "type": "module",
   "description": "Fin 2x skills and integrations for Pi and Claude Code",
   "license": "MIT",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "pi": {
     "skills": [
       "./plugins/skill-tools/skills",
@@ -15,9 +17,20 @@
       "./plugins/pr-tools/skills",
       "./pi/skills"
     ],
-    "extensions": []
+    "extensions": [
+      "./pi/extensions/fin-2x.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
   },
   "scripts": {
-    "test": "python3 -m unittest discover -s tests -v && node --test tests/*.test.ts"
+    "test": "python3 -m unittest discover -s tests -v && node --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
   }
 }

@@ -194,13 +194,20 @@ If the user explicitly requested a draft PR, add `--draft`.
 
 **Update existing PR:**
 ```bash
-gh pr edit --body "$(cat <<'EOF'
+gh pr edit --repo "<owner/repo>" --body "$(cat <<'EOF'
 <description body here>
 EOF
 )"
 ```
 
-**Check if PR exists:** `gh pr view --json number 2>/dev/null`
+**Check if PR exists:** `gh pr view --repo "<owner/repo>" --json number 2>/dev/null`
+
+**Fork SSO fallback:** Some `gh pr` commands query the parent repository even
+with `--repo`, and may fail on the parent's SSO restrictions. Do not retarget to
+upstream. Use `gh api --method POST repos/<owner>/<repo>/pulls` with explicit
+`head`, `base`, `title`, and `body` fields (or PATCH `pulls/<number>` to update).
+All intent, visibility, and diff checks above still apply. The REST target must
+be the same repository the user authorized.
 
 If PR already exists for branch, update its description. Otherwise create new PR.
 
@@ -265,6 +272,10 @@ Exit codes:
 - `watch-pr-merged.sh`: 0 = merged (prints `MERGED <sha>`), 1 = closed unmerged, 2 = error, 3 = timed out (prints `RESUME_ETAG=<etag>`)
 - `watch-pr-comments.sh`: 0 = new activity (prints items then `NEXT_SINCE=<cursor>`), 2 = error, 3 = timed out (prints `NEXT_SINCE=<cursor>`)
 - `pr-check-watcher.sh`: 0 = all checks passed, 1 = one or more failed (prints the failing check names and URLs), 2 = error, 3 = timed out (prints `RESUME_ETAGS=<a>|||<b>`)
+
+In Pi, `fin_2x_watch_pr` handles cursor resumption and watcher cleanup; do not
+launch duplicate watcher processes with bash. Monitoring stops when the session
+is shut down, reloaded, or navigated with `/tree`; restart explicitly if needed.
 
 **Exit 3 is not "give up" — it is "resume".** All three cap out at `WATCH_MAX_WAIT=570` seconds (~9.5 min) and exit 3 rather than block forever. On exit 3, immediately re-launch the same script in the background, passing the printed cursor as the second argument: `RESUME_ETAG` for `watch-pr-merged.sh`, `NEXT_SINCE` for `watch-pr-comments.sh`, `RESUME_ETAGS` for `pr-check-watcher.sh`. Skipping this means a PR that merges or gets reviewed hours later is silently missed.
 

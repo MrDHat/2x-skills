@@ -17,10 +17,13 @@ PI_CODING_AGENT_DIR and PI_CODING_AGENT_SESSION_DIR, not CLI/project overrides;
 confirm the root when those overrides may be in use. Show date window, root,
 files scanned, input/output tokens, cache reads/writes, and recorded USD by model.
 
-The report covers all branches because abandoned work still costs money. Copied
+The report covers usage within the requested date window across all branches,
+because abandoned work still costs money. Records without timestamps are included
+but counted separately as undated; do not present them as dated spend. Copied
 fork entries are deduplicated by ID, timestamp, and usage. It includes assistant,
 compaction, branch-summary, and standalone usage records (including cache warming).
-Summary records without provider/model stay unattributed; do not assign them to
+Tool-result usage from nested model work is also counted. `usage_records` counts
+records, not necessarily individual API requests. Summary records without provider/model stay unattributed; do not assign them to
 the last visible model. Missing cost fields mean unknown, not zero. Recorded
 zeroes can mean unpriced/subscription usage, not a free provider. Session estimates
 are not invoices and may omit usage from failed requests or third-party extensions.

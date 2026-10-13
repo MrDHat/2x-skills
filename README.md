@@ -21,7 +21,11 @@ Invoke skills with `/skill:<name>`, for example `/skill:create-pr` or
 Bundled scripts require their usual tools (Python 3, bash, `gh`, `jq`, and/or `curl`);
 installing the package does not install system tools.
 
-See [Pi support](./docs/pi.md) for compatibility and integration details.
+The Pi package includes ten skills, native session reports, hook equivalents,
+and background PR monitoring. Approval prompting is opt-in via
+`/fin-2x permissions on`; other hooks can be controlled with `/fin-2x`.
+Tested with Pi 1.2.0. See [Pi support](./docs/pi.md) for compatibility, controls,
+and known boundaries.
 
 ### Claude Code
 

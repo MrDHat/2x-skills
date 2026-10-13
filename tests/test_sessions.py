@@ -53,9 +53,18 @@ class SessionTests(unittest.TestCase):
         a = self.session(entries)
         b = self.session(entries, 'fork.jsonl')
         groups = sessions.costs([a, b])['models']
-        self.assertEqual(groups['p/m']['requests'], 2)
+        self.assertEqual(groups['p/m']['usage_records'], 2)
         self.assertAlmostEqual(groups['p/m']['recorded_cost_usd'], 0.4)
         self.assertEqual(groups['unattributed/unattributed']['missing_cost_records'], 1)
+
+    def test_cost_window_filters_old_messages_and_counts_nested_usage(self):
+        path = self.session([
+            {'type': 'message', 'id': 'old', 'timestamp': '2000-01-01T00:00:00Z', 'message': {'role': 'assistant', 'usage': {'input': 100}}},
+            {'type': 'message', 'id': 'new', 'timestamp': '2026-01-01T00:00:00Z', 'message': {'role': 'toolResult', 'usage': {'input': 3}}},
+        ])
+        group = sessions.costs([path], cutoff=1700000000)['models']['unattributed/unattributed']
+        self.assertEqual(group['input'], 3)
+        self.assertEqual(group['usage_records'], 1)
 
     def test_memory_root_never_falls_back_or_follows_symlinks(self):
         with self.assertRaises(ValueError):
