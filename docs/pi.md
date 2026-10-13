@@ -42,14 +42,43 @@ the user in conversation and waiting. Never invent unavailable tools. Pi does no
 enforce Claude's `allowed-tools` frontmatter. No subagent extension is required
 for the shared skills.
 
-## Claude-specific workflows
+## Pi-native workflows
 
-Claude's permissions, session format, telemetry, memory layout, and hooks are not
-Pi APIs. The Claude-specific skill directory is deliberately not in the Pi
-manifest. Pi-native versions and extensions are added in the next layers of the
-integration stack. Claude's hook shell scripts are not executed by Pi.
+The Claude-specific skill directory is deliberately not in the Pi manifest.
+Instead it loads these native versions:
+
+| Claude workflow | Pi equivalent |
+| --- | --- |
+| `tool-misses` | `/skill:tool-misses` scans Pi's ancestor-linked bash results |
+| `cc-cost-analysis` | `/skill:pi-cost-analysis` reads local Pi usage estimates |
+| `audit-memory` | `/skill:audit-memory --root <directory>` audits an explicit corpus |
+| `permissions-analyzer` | `/skill:permissions-analyzer` reviews the optional Fin 2x policy |
+
+Pi has no built-in memory store or Claude-style approval allowlist. The memory
+workflow requires an explicit root; it never falls back to Claude data. Cost
+reports include all branches and deduplicate copied fork history; prices are
+estimates, and missing prices are not counted as free. No external telemetry or
+session upload is involved.
+
+The report script honors `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR`.
+Pass `--root` for CLI `--session-dir` or project `sessionDir` overrides: an offline
+script cannot infer the current process's CLI settings. Errors name the selected
+root rather than silently scanning a different corpus.
+
+The optional permission policy lives at `<agent-dir>/fin-2x/permissions.json`:
+
+```json
+{"enabled": false, "allow": ["git status --short"]}
+```
+
+It is disabled by default and uses exact command strings, not prefix/glob rules.
+Only a small GREEN set of local inspection commands can bypass confirmation;
+interpreters/package managers/shell syntax are never auto-allowed. This is a
+bash approval helper, **not a sandbox** or a gate over all tools. Extension
+commands and hooks are supplied by the next layer of the stack. Claude hook
+shell scripts are never executed by Pi.
 
 ## Checks
 
-Run `npm test` (Python 3 required). This validates packaging and portable script
+Run `npm test` (Python 3 and Node 22.18+ required). This validates packaging and portable script
 paths without modifying your Pi configuration or calling a model.
