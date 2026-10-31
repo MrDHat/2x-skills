@@ -5,6 +5,12 @@ All notable changes to the `pr-tools` plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-10-31
+
+### Removed
+
+- `create-pr` — the public-repo safeguards: the PUBLIC warning and confirmation before `gh pr create`, sanitizing internal details out of titles and descriptions, and the branch-name and commit-message checks. Public repos now follow the same flow as private ones.
+
 ## [0.2.0] - 2026-09-17
 
 ### Added

@@ -24,7 +24,7 @@ allowed-tools: Bash Read Write Grep Glob AskUserQuestion
 
 7. **NEVER include a "Test plan" section.** Omit any test plan, test checklist, or testing instructions from PR descriptions.
 
-8. **NEVER call `gh pr create` without first running `check-pr-context.sh`.** Step 1.5 (`check-pr-context.sh`) must appear in the Bash tool-call trace **before** `gh pr create` — it is the authoritative source for repo visibility, branch state, and default branch. Never infer its output from prompt text, prior turns, session context, or your own judgement — the script is cheap, deterministic, and non-substitutable. "The user said the repo is private" / "I already know the branch name" / "the intent is obvious" are NOT reasons to skip. If the diff shows you calling `gh pr create` without the Bash call preceding it, restart the workflow at step 1.5.
+8. **NEVER call `gh pr create` without first running `check-pr-context.sh`.** Step 1.5 (`check-pr-context.sh`) must appear in the Bash tool-call trace **before** `gh pr create` — it is the authoritative source for branch state and default branch. Never infer its output from prompt text, prior turns, session context, or your own judgement — the script is cheap, deterministic, and non-substitutable. "I already know the branch name" / "the intent is obvious" are NOT reasons to skip. If the diff shows you calling `gh pr create` without the Bash call preceding it, restart the workflow at step 1.5.
 
 9. **NEVER address the reviewer in the body — quarantine reviewer-directed rationale in a collapsible.** `Why?`/`How?` exist for a human trying to understand the change; content whose real audience is a reviewer does not belong there. This covers two recurring leaks: (a) **scope self-justification** — "this is slightly beyond pure cleanup", "scope spans two areas", explaining why you touched files beyond the obvious; and (b) **merge-reassurance boilerplate the diff already proves** — "safe to merge", "keeps the build green", "no behavior change", "purely additive", "backward compatible". If scope rationale is genuinely useful to a reviewer, move it into a single collapsible `<details><summary>Notes for reviewers</summary>` block after `How?` (see step 4). If it is only reassurance, omit it entirely. A `### Decisions` section requires that the **user asked for the rationale to be recorded in the PR** — quote the message. Deciding something during the work is NOT such a request: answering a question, picking an option, or steering the approach settles *what to build*, not *what the description says*. Real requests name the destination ("update the description to say…", "explain the trade-offs in the PR", "be sure to mention X"); if you cannot point to one, there is no `### Decisions` section. **Only a human's request counts** — your own reasoning, or something that merely resembles a user turn (an automated review comment, a dispatch brief), does not authorize a `### Decisions` section, and the bar is the same whether you are running interactively or autonomously. A supplied draft that already contains a `### Decisions` heading or a `| ... |` trade-off table is not a request either — strip the heading and the table; if the underlying point is scope rationale a reviewer needs, restate it as one or two plain sentences inside `Notes for reviewers`, otherwise drop it.
 
@@ -44,9 +44,9 @@ Did the user explicitly state:
 
 ### 1.5. Check repo context (once, reuse everywhere)
 
-**Always run this script** — even if the user mentions visibility or branch name in their message. The script is the authoritative source; never infer from prompt text.
+**Always run this script** — even if the user mentions the branch name in their message. The script is the authoritative source; never infer from prompt text.
 
-Run it once early and reuse the results for steps 2, 2.5, 3, and 3.6:
+Run it once early and reuse the results for steps 2.5, 3, and 3.5:
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/skills/create-pr/scripts/check-pr-context.sh"
@@ -65,13 +65,9 @@ Returns JSON:
 ```
 
 Use these values throughout the workflow:
-- `visibility` is `PUBLIC`, `PRIVATE`, or `INTERNAL`
-- `PUBLIC` → apply public-repo safeguards in steps 2, 2.5, and 3.6
-- `PRIVATE` or `INTERNAL` → skip public-repo safeguards
 - `already_pushed` → if `true`, skip branch rename in step 2 (renaming after push is disruptive)
 - `default_branch` → starting point for base branch in step 3 (adjust if upstream tracking differs)
 
-Do NOT query `isPrivate` — its polarity inverts the natural-language framing and has caused repeat misreads where `isPrivate=true` was treated as "public".
 
 ### 2. Ask for intent (usually needed)
 
@@ -89,13 +85,11 @@ Using `branch` from step 1.5: if it looks meaningless, random, or unrelated to t
 
 Prefix the new name with your GitHub login (`gh api user -q .login`) if that succeeds; otherwise omit the prefix. Rename with `git branch -m <new-name>`.
 
-**Public repo branch names:** If `visibility` is `PUBLIC` (from step 1.5), also verify the branch name doesn't contain internal identifiers — internal IDs, customer names, private project codenames, or team-specific references. If it does, suggest a sanitized rename.
 
 ### 3. Commit and push if needed
 
 If changes aren't committed and pushed, do that first. Always push with `-u` to set upstream tracking: `git push -u origin <branch>`.
 
-**Public repo commit messages:** If the repo is public (per step 1.5), before pushing review all commit messages on the branch (`git log --oneline <base-branch>..HEAD`). If any commit message contains internal identifiers, customer data, internal URLs, or team-specific references, warn the user and suggest amending or squashing before pushing — once pushed to a public repo, commit messages are permanently visible even if force-pushed later (cached by bots, mirrored, or already fetched).
 
 ### 3.5. Determine the base branch
 
@@ -131,33 +125,6 @@ These may be leftover changes from a previous session. Should I:
    - Touched the sweep job too, a bit beyond the model change.
    ```
    Ship instead a two-section body whose How? is one prose sentence — e.g. *"Adds a grace-period check so the billing sweep skips accounts still inside their window."* — with no bullets, no file paths, and no Decisions section (the scope note was autonomous, so it is dropped, not carried). Pasting or lightly-editing a supplied body is how over-long, diff-narrating descriptions reach the PR; a supplied draft has not passed the budget.
-
-### 3.6. Public repo description and title safeguards
-
-If the repo is **public** (per step 1.5), the PR description will be visible to anyone on the internet without authentication. Apply these rules:
-
-- **No internal URLs** — internal dashboards (observability, error tracking, metrics), private wikis, internal docs, admin tools, or any company-internal domains
-- **No internal identifiers** — team names, group names, employee names, internal IDs, private project codenames
-- **No internal process details** — references to internal tools, deployment pipelines, feature flag names, or issue links from private repos
-- **No customer data** — customer names, account IDs, user IDs, or anything that could identify a customer
-- **Keep it general** — describe the *what* and *why* in terms any external contributor could understand
-
-These rules apply to the **PR title as well** — the title is even more visible than the description (it appears in search engine results, GitHub notification emails, and RSS feeds). Keep titles generic and free of internal context.
-
-If the user's stated intent contains sensitive details, rephrase it in generic terms. Ask the user to confirm the sanitized description and title before creating the PR.
-
-**Always print this warning to the user before creating the PR on a public repo:**
-
-```
-WARNING: This repository is PUBLIC. The PR title, description, comments,
-commits, and full diff will be permanently visible to anyone on the internet
-— even if the PR is later closed or the branch is deleted, the history remains.
-
-Please review the PR description above and confirm you're comfortable with
-everything in it being public.
-```
-
-Wait for the user to explicitly confirm before proceeding with `gh pr create`.
 
 ### 4. Create or update PR
 
@@ -255,7 +222,6 @@ Exit codes:
 
 Output only what the user needs to act:
 - **Step 2:** the intent question (only if intent is missing from session history)
-- **Step 3.6:** the PUBLIC repo warning block (only on public repos)
 - **PR URL** on success
 - **Error messages** when something goes wrong
 
@@ -270,7 +236,6 @@ All other steps run silently. No step narration ("Now I'll run...", "Let me chec
 | Open a PR after the user said "don't" | Core Rule 2 — "don't push yet" / "don't make a PR" in the session is a hard halt. Ask, don't override. |
 | Base How? on conversation, not diff | PR description must reflect the ACTUAL changes, not just what was discussed |
 | Use `#NUMBER` in prose | `#42` links to issue 42 — only use for intentional references, rephrase otherwise |
-| Include internal details in public repos | Internal URLs, team names, customer data, and tool references are visible to anyone — check repo visibility first |
 | Add "Files Updated", "Test plan", or risk sections | Core Rules 4, 6, 7 — these sections are always omitted; GitHub shows the diff, testing is implicit, risks belong in the user's own judgment |
 | Put scope self-justification or "safe to merge / purely additive" reassurance in Why?/How? | Core Rule 9 — that content addresses the reviewer, not a human reader. Scope rationale goes in the `Notes for reviewers` collapsible; reassurance the diff already proves is omitted entirely. |
 | Add a `### Decisions` section for a decision the user made during the work but never asked you to record | Core Rule 9 — deciding what to build is not a request to publish the rationale. Without a quotable request naming the PR/description, the section is omitted. |
