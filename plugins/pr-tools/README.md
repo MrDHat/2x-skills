@@ -20,7 +20,7 @@ Part of the [`fin-2x`](../../README.md) marketplace.
 
 `create-pr` launches these three scripts in the background once a PR is created or updated, so the session never polls `gh pr view` / `gh pr checks` in a loop. Each blocks until something changes (or times out at ~9.5 minutes and prints a cursor to resume from):
 
-- **watch-pr-comments.sh** — blocks until a new comment, review, or inline review comment lands.
+- **watch-pr-comments.sh** — blocks until a new comment, review, or inline review comment lands. It skips CodeRabbit's walkthrough comment and its in-place status edits, batches a review with its inline comments, and trims bodies to the finding plus a `gh api` call for the collapsed details.
 - **watch-pr-merged.sh** — blocks until the PR is merged or closed unmerged.
 - **pr-check-watcher.sh** — blocks until all CI checks (check-runs and commit statuses) reach a terminal state.
 

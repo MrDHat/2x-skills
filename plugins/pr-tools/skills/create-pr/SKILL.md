@@ -211,6 +211,8 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/pr-check-watcher.sh" <pr-url>
 
 Do NOT poll `gh pr view` or `gh pr checks` for comments, merge state, or CI — that is what these watchers replace.
 
+**Review bots (CodeRabbit included) come through `watch-pr-comments.sh` too.** Never check for bot reviews any other way — no `sleep`-and-`gh api` loops, no `ScheduleWakeup`, `/loop`, cron or `Monitor` polling, no re-reading the PR "to see if CodeRabbit finished". Each of those re-reads the whole conversation on every check, which is what makes in-context polling expensive. The watcher already skips CodeRabbit's walkthrough comment and its in-place "review in progress" edits, and waits briefly after the first new item so a review and its inline comments arrive in one wake-up. Its lines are trimmed: an inline comment shows `path:line` and the finding, and collapsed sections (proposed diffs, "prompt for AI agents") are replaced by the `gh api … --jq .body` call that reads them. Run that call only for a comment you are about to fix.
+
 Exit codes:
 - `watch-pr-merged.sh`: 0 = merged (prints `MERGED <sha>`), 1 = closed unmerged, 2 = error, 3 = timed out (prints `RESUME_ETAG=<etag>`)
 - `watch-pr-comments.sh`: 0 = new activity (prints items then `NEXT_SINCE=<cursor>`), 2 = error, 3 = timed out (prints `NEXT_SINCE=<cursor>`)
