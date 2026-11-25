@@ -5,6 +5,13 @@ All notable changes to the `pr-tools` plugin are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-25
+
+### Changed
+
+- `watch-pr-comments.sh` — skips CodeRabbit's walkthrough comment and the status notices it rewrites in place, so its edits no longer wake the agent; skips empty review wrappers; waits a short settle period (`WATCH_SETTLE`, default 30s) after the first new item so a review and its inline comments arrive together; and trims every body (HTML, images and collapsed sections removed, with the `gh api` call to read the full text). Inline comments now show `path:line`. On a real CodeRabbit review this cut the output by about 70%.
+- `create-pr` — says review-bot feedback arrives through the comments watcher and must never be polled in context.
+
 ## [0.3.0] - 2026-10-31
 
 ### Removed
