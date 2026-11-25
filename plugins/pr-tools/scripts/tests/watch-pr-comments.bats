@@ -19,6 +19,7 @@ setup() {
 
   export WATCH_INTERVAL=0
   export WATCH_MAX_WAIT=2
+  export WATCH_SETTLE=0
 
   PR_URL="https://github.com/acme/widgets/pull/42"
   SINCE="2025-01-01T00:00:00Z"
@@ -65,7 +66,14 @@ case "$endpoint" in
     body="$(cat "$F/issue_comments_page2.json")"
     ;;
   *issues/*/comments\?*)
-    body="$(cat "$F/issue_comments.json")"
+    # A round-2 fixture, when present, is served from the second poll on —
+    # used to model an item landing during the settle wait.
+    echo x >> "$F/issue_calls"
+    if [[ -f "$F/issue_comments_round2.json" && $(wc -l < "$F/issue_calls") -ge 2 ]]; then
+      body="$(cat "$F/issue_comments_round2.json")"
+    else
+      body="$(cat "$F/issue_comments.json")"
+    fi
     ;;
   *pulls/*/reviews\?*)
     body="$(cat "$F/reviews.json")"
@@ -190,6 +198,65 @@ JSON
   [[ "$output" != *"stale review"* ]]
   [[ "$output" == *"review(APPROVED) bob 2025-06-01T12:00:00Z: ship it"* ]]
   assert_next_since_is_timestamp
+}
+
+# ============================================================
+# Trimming — keep bot noise out of the agent's context
+# ============================================================
+
+@test "a CodeRabbit walkthrough comment is skipped and does not wake the agent" {
+  printf '%s' '[{"id":301,"user":{"login":"coderabbitai[bot]"},"created_at":"2025-06-01T00:00:00Z","updated_at":"2025-06-01T00:05:00Z","body":"<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n## Walkthrough\nWALKTHROUGH-TEXT"}]' > "$FIXTURES/issue_comments.json"
+  export WATCH_MAX_WAIT=1
+
+  run_watch "$PR_URL" "$SINCE"
+  [ "$status" -eq 3 ]
+  [[ "$output" != *"WALKTHROUGH-TEXT"* ]]
+}
+
+@test "a CodeRabbit chat reply without the auto-generated marker is still reported" {
+  printf '%s' '[{"id":302,"user":{"login":"coderabbitai[bot]"},"created_at":"2025-06-01T00:00:00Z","updated_at":"2025-06-01T00:00:00Z","body":"You are right, the check is redundant."}]' > "$FIXTURES/issue_comments.json"
+
+  run_watch "$PR_URL" "$SINCE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"comment coderabbitai[bot] 2025-06-01T00:00:00Z: You are right, the check is redundant."* ]]
+}
+
+@test "an inline comment shows file:line, drops markup and collapsed sections, and says how to read them" {
+  printf '%s' '[{"id":401,"user":{"login":"coderabbitai[bot]"},"created_at":"2025-06-01T00:00:00Z","updated_at":"2025-06-01T00:00:00Z","path":"app/models/user.rb","line":12,"body":"<!-- coderabbit-ai-generated:v1 -->\n**<picture><img src=\"x.svg\"></picture> Major** · **Guard against nil.**\n\n<details>\n<summary>Proposed fix</summary>\nDIFF-NOISE <details><summary>inner</summary>NESTED-NOISE</details> MORE-NOISE\n</details>\n<!-- fingerprinting:abc -->"}]' > "$FIXTURES/review_comments.json"
+
+  run_watch "$PR_URL" "$SINCE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"review-comment coderabbitai[bot] 2025-06-01T00:00:00Z app/models/user.rb:12: ** Major** · **Guard against nil.**"* ]]
+  [[ "$output" == *"gh api repos/acme/widgets/pulls/comments/401 --jq .body"* ]]
+  [[ "$output" != *"NOISE"* ]]
+  [[ "$output" != *"<"* ]]
+}
+
+@test "an empty COMMENTED review wrapper is skipped but a review with text is kept" {
+  cat > "$FIXTURES/reviews.json" <<JSON
+[
+  {"id":5,"user":{"login":"erin"},"submitted_at":"2025-06-01T12:00:00Z","state":"COMMENTED","body":""},
+  {"id":6,"user":{"login":"frank"},"submitted_at":"2025-06-01T12:00:00Z","state":"CHANGES_REQUESTED","body":""},
+  {"id":7,"user":{"login":"coderabbitai[bot]"},"submitted_at":"2025-06-01T12:00:00Z","state":"COMMENTED","body":"**Actionable comments posted: 2**"}
+]
+JSON
+
+  run_watch "$PR_URL" "$SINCE"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"erin"* ]]
+  [[ "$output" == *"review(CHANGES_REQUESTED) frank 2025-06-01T12:00:00Z:"* ]]
+  [[ "$output" == *"review(COMMENTED) coderabbitai[bot] 2025-06-01T12:00:00Z: **Actionable comments posted: 2**"* ]]
+}
+
+@test "an item landing during the settle wait arrives in the same wake-up" {
+  export WATCH_SETTLE=1
+  printf '[{"id":501,"user":{"login":"bob"},"created_at":"2025-06-01T00:00:00Z","updated_at":"2025-06-01T00:00:00Z","body":"first"}]' > "$FIXTURES/issue_comments.json"
+  printf '[{"id":501,"user":{"login":"bob"},"created_at":"2025-06-01T00:00:00Z","updated_at":"2025-06-01T00:00:00Z","body":"first"},{"id":502,"user":{"login":"bob"},"created_at":"2025-06-01T00:00:02Z","updated_at":"2025-06-01T00:00:02Z","body":"second"}]' > "$FIXTURES/issue_comments_round2.json"
+
+  run_watch "$PR_URL" "$SINCE"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^comment bob' <<<"$output")" -eq 2 ]
+  [[ "$output" == *"second"* ]]
 }
 
 # ============================================================

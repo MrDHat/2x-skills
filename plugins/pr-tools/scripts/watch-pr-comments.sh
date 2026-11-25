@@ -16,6 +16,9 @@
 # Env overrides:
 #   WATCH_INTERVAL - poll interval seconds (default 20)
 #   WATCH_MAX_WAIT - max wait seconds (default 570)
+#   WATCH_SETTLE   - after the first new item, wait this long and poll once
+#                    more so a review and its inline comments arrive together
+#                    (default 30; 0 disables)
 #
 # Exit codes:
 #   0 - new activity found; prints items then NEXT_SINCE=<cursor for next run>
@@ -131,20 +134,22 @@ already_seen() {
     return 1
 }
 
-# Prints newly-seen rows (id, author, timestamp, state-or-empty, body) and
-# tracks found_new as a global. Rows are US-delimited (\x1f): a non-whitespace
-# IFS preserves empty fields, where consecutive tabs would collapse and shift
-# the body into the state column.
+# Prints newly-seen rows (id, author, timestamp, state-or-empty, location,
+# body) and tracks found_new as a global. Rows are US-delimited (\x1f): a
+# non-whitespace IFS preserves empty fields, where consecutive tabs would
+# collapse and shift the body into the state column.
 emit_rows() {
     local prefix="$1" rows="$2"
     [[ -z "$rows" ]] && return 0
-    while IFS=$'\x1f' read -r id author ts state body; do
+    while IFS=$'\x1f' read -r id author ts state loc body; do
         [[ -z "$id" ]] && continue
         if already_seen "$prefix-$id"; then
             continue
         fi
         if [[ "$prefix" == "review" ]]; then
             echo "review($state) $author $ts: $body"
+        elif [[ -n "$loc" ]]; then
+            echo "$prefix $author $ts $loc: $body"
         else
             echo "$prefix $author $ts: $body"
         fi
@@ -152,10 +157,64 @@ emit_rows() {
     done <<< "$rows"
 }
 
+# Every printed line lands in the agent's context, so bodies are cut down to
+# what a reader needs. HTML comments, images and tags go; collapsed <details>
+# sections (bots park proposed diffs, nitpicks and "prompt for AI agents"
+# blocks there) are dropped and replaced by the `gh api` call that reads the
+# full body, so nothing is lost — the agent fetches it only when it acts.
+#
+# CodeRabbit gets two extra rules. Its walkthrough/summary comment (and the
+# "review in progress" / rate-limit notices it rewrites in place) is skipped
+# outright: it is edited several times per review, and each edit would wake
+# the agent with nothing to act on. And a review whose body is empty after
+# cleaning (GitHub's wrapper around a batch of inline comments) is skipped,
+# since the inline comments themselves are reported.
+#
 # Comments use updated_at to match the `since` filter's semantics — an edited
 # old comment is served with its edit time, so it's reported once instead of
 # on every subsequent run.
-comment_rows_jq='.[] | [(.id|tostring), .user.login, (.updated_at // .created_at), "", (.body // "" | gsub("[\r\n\t\u001f]+";" ") | if length > 2000 then .[0:2000] + "…(truncated)" else . end)] | join("\u001f")'
+jq_defs='
+def strip_details:
+  if test("<details[^>]*>(?:(?!<details)[\\s\\S])*?</details>")
+  then gsub("<details[^>]*>(?:(?!<details)[\\s\\S])*?</details>"; " ") | strip_details
+  else . end;
+def is_coderabbit: (.user.login // "") | startswith("coderabbitai");
+def is_cr_notice: is_coderabbit and ((.body // "") | test("auto-generated comment: [^>]*by coderabbit\\.ai"));
+def cleaned($fetch):
+  (.body // "") as $raw
+  | ($raw | test("<details")) as $collapsed
+  | $raw
+  | gsub("<!--[\\s\\S]*?-->"; "")
+  | strip_details
+  | gsub("<picture>[\\s\\S]*?</picture>"; "")
+  | gsub("!\\[[^\\]]*\\]\\([^)]*\\)"; "")
+  | gsub("<[^>]+>"; "")
+  | gsub("[\r\n\t\u001f]+"; " ")
+  | gsub("  +"; " ")
+  | sub("^ +"; "") | sub(" +$"; "")
+  | (if length > 1500 then .[0:1500] + "…(truncated)" else . end)
+  | . as $b
+  | if $collapsed and ($b | length) > 0 then $b + " [collapsed sections omitted; full text: gh api " + $fetch + " --jq .body]"
+    elif $collapsed then "[body is all collapsed sections; full text: gh api " + $fetch + " --jq .body]"
+    else $b end;
+'
+issue_comment_rows_jq="$jq_defs"'.[] | select(is_cr_notice | not)
+  | [(.id|tostring), .user.login, (.updated_at // .created_at), "", "",
+     cleaned("repos/'"$owner/$repo"'/issues/comments/\(.id)")] | join("\u001f")'
+review_rows_jq="$jq_defs"'.[] | select(.submitted_at != null and .submitted_at > $cursor)
+  | . as $r | ($r | cleaned("repos/'"$owner/$repo/pulls/$pr_number"'/reviews/\($r.id)")) as $body
+  | select(($r.state != "COMMENTED") or ($body | length) > 0)
+  | [($r.id|tostring), $r.user.login, $r.submitted_at, $r.state, "", $body] | join("\u001f")'
+review_comment_rows_jq="$jq_defs"'.[]
+  | [(.id|tostring), .user.login, (.updated_at // .created_at), "",
+     ((.path // "") + (if (.line // .original_line) then ":" + ((.line // .original_line)|tostring) else "" end)),
+     cleaned("repos/'"$owner/$repo"'/pulls/comments/\(.id)")] | join("\u001f")'
+
+# A reviewer (human or bot) usually posts a review and its inline comments a
+# few seconds apart. After the first new item, wait one settle period and poll
+# once more so the whole batch arrives in one wake-up instead of several.
+settle="${WATCH_SETTLE:-30}"
+settled=false
 
 while true; do
     # Back-date the round cursor by one second: timestamps are whole-second,
@@ -169,7 +228,7 @@ while true; do
     read_endpoint "repos/$owner/$repo/issues/$pr_number/comments?since=$cursor&per_page=100" "$comments_etag"
     if [[ -n "$all_body" ]]; then
         [[ -n "$fetch_etag" ]] && comments_etag="$fetch_etag"
-        rows="$(jq -r "$comment_rows_jq" <<<"$all_body" 2>/dev/null)" || rows=""
+        rows="$(jq -r "$issue_comment_rows_jq" <<<"$all_body" 2>/dev/null)" || rows=""
         emit_rows "comment" "$rows"
     fi
 
@@ -179,7 +238,7 @@ while true; do
     # Reviews are PR-only — the pulls/* endpoint 404s for a plain issue.
     [[ "$is_pr" == true ]] && read_endpoint "repos/$owner/$repo/pulls/$pr_number/reviews?per_page=100" "" || all_body=""
     if [[ -n "$all_body" ]]; then
-        rows="$(jq -r --arg cursor "$cursor" '.[] | select(.submitted_at != null and .submitted_at > $cursor) | [(.id|tostring), .user.login, .submitted_at, .state, (.body // "" | gsub("[\r\n\t\u001f]+";" ") | if length > 2000 then .[0:2000] + "…(truncated)" else . end)] | join("\u001f")' <<<"$all_body" 2>/dev/null)" || rows=""
+        rows="$(jq -r --arg cursor "$cursor" "$review_rows_jq" <<<"$all_body" 2>/dev/null)" || rows=""
         emit_rows "review" "$rows"
     fi
 
@@ -187,11 +246,16 @@ while true; do
     [[ "$is_pr" == true ]] && read_endpoint "repos/$owner/$repo/pulls/$pr_number/comments?since=$cursor&per_page=100" "$review_comments_etag" || all_body=""
     if [[ -n "$all_body" ]]; then
         [[ -n "$fetch_etag" ]] && review_comments_etag="$fetch_etag"
-        rows="$(jq -r "$comment_rows_jq" <<<"$all_body" 2>/dev/null)" || rows=""
+        rows="$(jq -r "$review_comment_rows_jq" <<<"$all_body" 2>/dev/null)" || rows=""
         emit_rows "review-comment" "$rows"
     fi
 
     if [[ "$found_new" == "true" ]]; then
+        if [[ "$settled" == "false" ]] && (( settle > 0 )); then
+            settled=true
+            sleep "$settle"
+            continue
+        fi
         echo "NEXT_SINCE=$round_start"
         exit 0
     fi
